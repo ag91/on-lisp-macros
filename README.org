@@ -1,0 +1,108 @@
+# Created 2017-12-20 Wed 13:03
+#+TITLE: macros
+#+AUTHOR: Andrea Giugliano
+This is some experimenting with Common Lisp following the excellent
+"On Lisp" by Paul Graham:
+
+First let's experiment with the Common Lisp macro =member=
+
+#+BEGIN_SRC lisp
+(member "2" '("1" "2" "3"))
+; => NIL
+#+END_SRC
+
+If we define the function to use the equality on string test (instead of
+the default =eql=):
+
+#+BEGIN_SRC lisp
+(member "2" '("1" "2" "3") :test #'string=)
+; => (2 3)
+#+END_SRC
+
+If we need this special variant a lot, we can write a macro:
+
+#+BEGIN_SRC lisp
+(defmacro string-member (e es)
+  `(member ,e ,es :test ,#'string=))
+
+(string-member "2" '("1" "2" "3"))
+#+END_SRC
+
+And we can use expansion to double check if things expand correctly:
+
+#+BEGIN_SRC lisp
+(macroexpand '(string-member "x" '("x")))
+; => (MEMBER "x" '("x") :TEST #<FUNCTION STRING=>)
+#+END_SRC
+
+Naturally we can expand defmacro:
+
+#+BEGIN_SRC lisp
+(macroexpand '(defmacro x (y) `(+ 1 y)))
+; I am using SBCL here
+;;=> (PROGN
+;;  (EVAL-WHEN (:COMPILE-TOPLEVEL)
+;;    (SB-C::%COMPILER-DEFMACRO :MACRO-FUNCTION 'X T))
+;;  (EVAL-WHEN (:COMPILE-TOPLEVEL :LOAD-TOPLEVEL :EXECUTE)
+;;    (SB-C::%DEFMACRO 'X
+;;                     (SB-INT:NAMED-LAMBDA (MACRO-FUNCTION X)
+;;                         (#:EXPR #:ENV)
+;;                       (DECLARE (SB-C::LAMBDA-LIST (Y)))
+;;                       (DECLARE (IGNORE #:ENV))
+;;                       (SB-INT:NAMED-DS-BIND (:MACRO X . DEFMACRO)
+;;                           (Y)
+;;                           (CDR #:EXPR)
+;;                         (BLOCK X `(+ 1 Y))))
+;;                     (SB-C:SOURCE-LOCATION))))
+;; T
+#+END_SRC
+
+We now define how a macro works:
+
+#+BEGIN_SRC lisp
+(defmacro the-expander (name) `(get ,name 'expander))
+#+END_SRC
+
+The expander is our way of storing macros definition. Given the name
+of the macro, =get= will retrieve the ='expander= for the macro.
+
+#+BEGIN_SRC lisp
+(defmacro the-defmacro (name params &body body)
+  (let ((g (gensym)))
+    `(progn
+      (setf (the-expander ',name)
+       #'(lambda (,g)
+           (block ,name
+             (destructuring-bind ,params (cdr ,g)
+               ,@body))))
+      ',name)))
+#+END_SRC
+
+Something cool happens here: we =setf= the expander for the macro to
+be a function. This takes a parameter with a random name (=gensym=)
+and produces a block initialized with the future parameters. The
+parameter will be our macro application!
+
+#+BEGIN_SRC lisp
+(defun the-macroexpand-1 (expr)
+  (if (and (consp expr) (the-expander (car expr)))
+      (funcall (the-expander (car expr)) expr)
+      expr))
+#+END_SRC
+
+At this point we can expand the macro by executing the function for
+the given macro application. The =if= statement filters out the cases
+where the expression is not a list or no macro expansion is defined
+for the name.
+
+
+Finally let's use =the-macroexpand-1= to define our previous
+=string-member= macro:
+
+#+BEGIN_SRC lisp
+(the-defmacro string-member1 (e es)
+  `(member ,e ,es :test ,#'string=))
+
+(the-macroexpand-1 '(string-member1 "x" '("x" "2")))
+;; => (MEMBER "x" '("x" "2") :TEST #<FUNCTION STRING=>)
+#+END_SRC
